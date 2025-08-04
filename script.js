@@ -19,7 +19,7 @@ const engine = {
     gravity: 0.6,
     friction: 0.98,
     bounce: 0.7,
-    airResistance: 0.995
+    airResistance: 0.999
 };
 const balls = [];
 const ballRadius = 30;
@@ -597,15 +597,6 @@ function draw() {
     }
 
     drawScore();
-
-    // Draw Save Button
-    ctx.fillStyle = saveButton.color;
-    ctx.fillRect(saveButton.x, saveButton.y, saveButton.width, saveButton.height);
-    ctx.fillStyle = saveButton.textColor;
-    ctx.font = '20px Arial';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(saveButton.text, saveButton.x + saveButton.width / 2, saveButton.y + saveButton.height / 2);
 }
 
 function drawScore() {
@@ -696,19 +687,6 @@ function drawSingleHoop(hoopObj, flipped) {
             }
         }
     }
-
-    // Draw the two rim posts for debugging
-    ctx.beginPath();
-    ctx.arc(hoopObj.rimPostLeft.x, hoopObj.rimPostLeft.y, hoopObj.rimPostLeft.radius, 0, Math.PI * 2);
-    ctx.fillStyle = 'red';
-    ctx.fill();
-    ctx.closePath();
-
-    ctx.beginPath();
-    ctx.arc(hoopObj.rimPostRight.x, hoopObj.rimPostRight.y, hoopObj.rimPostRight.radius, 0, Math.PI * 2);
-    ctx.fillStyle = 'red';
-    ctx.fill();
-    ctx.closePath();
 }
 
 // --- Start ---
@@ -735,8 +713,6 @@ canvas.addEventListener('mousedown', (e) => {
         isDragging = true;
         draggedHoop = hoopRight;
         draggedPost = 'rimPostRight';
-    } else if (isPointInRect(mouseX, mouseY, saveButton.x, saveButton.y, saveButton.width, saveButton.height)) {
-        saveCoordinates();
     }
 });
 
