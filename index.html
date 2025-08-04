@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera App</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <video id="camera-feed" autoplay></video>
+        <canvas id="game-canvas"></canvas>
+    </div>
+    <div id="controls">
+        <button id="save-coords-btn">Save Coordinates</button>
+    </div>
+    <!-- TensorFlow.js and MediaPipe Hands dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core@latest/dist/tf-core.min.js?v=1"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter@latest/dist/tf-converter.min.js?v=1"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@latest/dist/tf-backend-webgl.min.js?v=1"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@latest/hands.min.js?v=1"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection@latest/dist/hand-pose-detection.min.js?v=1"></script>
+    <script src="script.js?v=1"></script>
+</body>
+</html>
