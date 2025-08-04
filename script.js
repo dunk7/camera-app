@@ -27,7 +27,7 @@ const MAX_BALLS = 10;
 
 const hand = {
     x: 0, y: 0, radius: 70,
-    color: 'rgba(0, 220, 255, 0.5)',
+    color: 'rgba(128, 128, 128, 0.5)',
     visible: false,
     dx: 0, dy: 0,
     isPinching: false,
@@ -140,7 +140,38 @@ async function main() {
             createBall();
         }
 
-        gameLoop();
+        let previousTime = performance.now();
+        const FPS = 60;
+        const frameDuration = 1000 / FPS;
+        let accumulator = 0;
+
+        async function gameLoop(currentTime) {
+            requestAnimationFrame(gameLoop);
+
+            const deltaTime = currentTime - previousTime;
+            previousTime = currentTime;
+            accumulator += deltaTime;
+
+            let predictions = [];
+            if (detector && video.readyState >= 2) {
+                predictions = await detector.estimateHands(video);
+            }
+
+            updateHandState(predictions);
+
+            while (accumulator >= frameDuration) {
+                updateBalls();
+                checkHandCollisions();
+                checkRimCollisions(); // New collision check for the rim
+                checkBallCollisions(); // Ensure ball-to-ball collisions are checked
+                checkScore();
+                accumulator -= frameDuration;
+            }
+
+            draw();
+        }
+
+        gameLoop(performance.now());
     } catch (error) {
         console.error("Setup failed:", error);
         ctx.fillStyle = 'white';
@@ -190,22 +221,30 @@ async function loadHandTrackingModel() {
 }
 
 // --- Main Game Loop ---
-async function gameLoop() {
+async function gameLoop(currentTime) {
+    requestAnimationFrame(gameLoop);
+
+    const deltaTime = currentTime - previousTime;
+    previousTime = currentTime;
+    accumulator += deltaTime;
+
     let predictions = [];
     if (detector && video.readyState >= 2) {
         predictions = await detector.estimateHands(video);
     }
 
     updateHandState(predictions);
-    updateBalls();
-    checkHandCollisions();
-    checkRimCollisions(); // New collision check for the rim
-    checkBallCollisions(); // Ensure ball-to-ball collisions are checked
-    checkScore();
+
+    while (accumulator >= frameDuration) {
+        updateBalls();
+        checkHandCollisions();
+        checkRimCollisions(); // New collision check for the rim
+        checkBallCollisions(); // Ensure ball-to-ball collisions are checked
+        checkScore();
+        accumulator -= frameDuration;
+    }
 
     draw();
-
-    requestAnimationFrame(gameLoop);
 }
 
 // --- Update Functions ---
@@ -299,10 +338,11 @@ function updateBalls() {
             ball.y = hand.y;
             ball.dx = hand.dx;
             ball.dy = hand.dy;
+            ball.angularVelocity = 0; // No spin while held
 
             if (!hand.isPinching) {
                 hand.releaseCounter++;
-                if (hand.releaseCounter >= 4) { // Changed from 2 to 4
+                if (hand.releaseCounter >= 3) { // Adjusted for quicker release
                     ball.isCaught = false;
                     hand.heldBall = null;
                     hand.releaseCounter = 0;
@@ -317,8 +357,9 @@ function updateBalls() {
                     avgVelocity.dx /= hand.velocityHistory.length;
                     avgVelocity.dy /= hand.velocityHistory.length;
 
-                    ball.dx = avgVelocity.dx * 1.5;
-                    ball.dy = avgVelocity.dy * 1.5;
+                    ball.dx = avgVelocity.dx * 1;
+                    ball.dy = avgVelocity.dy * 1;
+                    ball.angularVelocity = -avgVelocity.dx / ball.radius * 0.5; // Impart spin based on horizontal velocity
                     ball.ignoreHandCollisionUntil = Date.now() + 500;
                 }
             } else {
@@ -331,10 +372,12 @@ function updateBalls() {
             // Apply air resistance
             ball.dx *= engine.airResistance;
             ball.dy *= engine.airResistance;
+            ball.angularVelocity *= engine.airResistance; // Air resistance on spin
             
-            // Update position
+            // Update position and rotation
             ball.x += ball.dx;
             ball.y += ball.dy;
+            ball.rotation += ball.angularVelocity;
 
             // Clamp ball position to be within the canvas boundaries
             if (ball.x + ball.radius > canvas.width) {
@@ -348,6 +391,7 @@ function updateBalls() {
                 ball.y = canvas.height - ball.radius;
                 ball.dy *= -engine.bounce;
                 ball.dx *= engine.friction; // Apply friction when hitting the floor
+                ball.angularVelocity = -ball.dx / ball.radius; // Spin based on horizontal velocity on bounce
                 if (ball.scored) {
                     ball.scored = false; // Reset for next score
                 }
@@ -377,18 +421,6 @@ function checkHandCollisions() {
             if (hand.isPinching && !hand.heldBall) { // Can only grab if not already holding a ball
                 ball.isCaught = true;
                 hand.heldBall = ball; // Keep track of the held ball
-            } else if (!hand.heldBall) { // Only apply physics if not holding a ball
-                const angle = Math.atan2(dy, dx);
-                const overlap = minDistance - distance;
-
-                ball.x += Math.cos(angle) * overlap * 0.5;
-                ball.y += Math.sin(angle) * overlap * 0.5;
-
-                ball.dx += hand.dx * 0.6;
-                ball.dy += hand.dy * 0.6;
-
-                ball.dx += Math.cos(angle) * 2;
-                ball.dy += Math.sin(angle) * 2;
             }
         }
     }
@@ -480,6 +512,8 @@ function checkSingleHoopScore(hoopObj) {
         if (isWithinRimX && isPassingThroughRimVertically && isMovingDown) {
             score++;
             ball.scored = true;
+            ball.dy *= 0.5; // Slow down vertical velocity
+            ball.dx *= 0.5; // Slow down horizontal velocity
             console.log("Score! Current Score: ", score);
         }
     }
@@ -492,6 +526,8 @@ function createBall() {
         radius: ballRadius,
         dx: Math.random() * 8 - 4,
         dy: 0,
+        rotation: 0,
+        angularVelocity: Math.random() * 0.1 - 0.05, // Initial random spin
         isCaught: false,
         scored: false,
         mass: 1 // Add mass property for physics calculations
@@ -550,15 +586,18 @@ function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     drawFloor();
-    drawHoop();
 
     // Draw balls
     for (const ball of balls) {
         if (basketballImage.complete && basketballImage.naturalHeight !== 0) {
-            // Draw image if loaded
-            ctx.drawImage(basketballImage, ball.x - ball.radius, ball.y - ball.radius, ball.radius * 2, ball.radius * 2);
+            // Draw image if loaded with rotation
+            ctx.save();
+            ctx.translate(ball.x, ball.y);
+            ctx.rotate(ball.rotation);
+            ctx.drawImage(basketballImage, -ball.radius, -ball.radius, ball.radius * 2, ball.radius * 2);
+            ctx.restore();
         } else {
-            // Fallback to drawing a circle if image not loaded
+            // Fallback to drawing a circle if image not loaded (no rotation for fallback)
             ctx.beginPath();
             ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
             ctx.fillStyle = '#FF8C00'; // Dark Orange for basketball
@@ -566,6 +605,8 @@ function draw() {
             ctx.closePath();
         }
     }
+
+    drawHoop();
 
     // Draw hand indicator
     if (hand.visible) {
@@ -586,12 +627,12 @@ function draw() {
         if (hand.thumbPos && hand.indexPos) {
             ctx.beginPath();
             ctx.arc(hand.thumbPos.x, hand.thumbPos.y, 10, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(255, 0, 0, 0.7)'; // Red for thumb
+            ctx.fillStyle = 'rgba(169, 169, 169, 0.7)'; // Grey for thumb
             ctx.fill();
 
             ctx.beginPath();
             ctx.arc(hand.indexPos.x, hand.indexPos.y, 10, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(0, 0, 255, 0.7)'; // Blue for index
+            ctx.fillStyle = 'rgba(169, 169, 169, 0.7)'; // Grey for index
             ctx.fill();
         }
     }
