@@ -25,18 +25,24 @@ const balls = [];
 const ballRadius = 30;
 const MAX_BALLS = 10;
 
-const hand = {
-    x: 0, y: 0, radius: 70,
-    color: 'rgba(128, 128, 128, 0.5)',
-    visible: false,
-    dx: 0, dy: 0,
-    isPinching: false,
-    heldBall: null, // Reference to the ball being held
-    releaseCounter: 0, // Counter for delayed release
-    velocityHistory: [], // For averaging velocity
-    thumbPos: { x: 0, y: 0 },
-    indexPos: { x: 0, y: 0 }
-};
+function createHand(color) {
+    return {
+        x: 0, y: 0, radius: 70,
+        color: color,
+        visible: false,
+        dx: 0, dy: 0,
+        isPinching: false,
+        heldBall: null,
+        releaseCounter: 0,
+        velocityHistory: [],
+        thumbPos: { x: 0, y: 0 },
+        indexPos: { x: 0, y: 0 },
+        lastDetectionTime: 0
+    };
+}
+
+const leftHand = createHand('rgba(0, 0, 255, 0.5)'); // Blue for left
+const rightHand = createHand('rgba(0, 255, 0, 0.5)'); // Green for right
 
 const hoop = {
     x: 50, // Position on the left
@@ -75,6 +81,12 @@ hoopImage.src = 'hoop.png';
 let isDragging = false;
 let draggedHoop = null;
 let draggedPost = null;
+
+let leftScore = 0;
+let rightScore = 0;
+let leftFlashEndTime = 0;
+let rightFlashEndTime = 0;
+const FLASH_DURATION = 500; // ms
 
 const saveButton = {
     x: 50,
@@ -216,7 +228,7 @@ async function loadHandTrackingModel() {
         throw new Error("handPoseDetection library not loaded. Check script order in index.html.");
     }
     const model = handPoseDetection.SupportedModels.MediaPipeHands;
-    const detectorConfig = { runtime: 'mediapipe', solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240' };
+    const detectorConfig = { runtime: 'mediapipe', solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240', maxNumHands: 2 };
     detector = await handPoseDetection.createDetector(model, detectorConfig);
 }
 
@@ -249,9 +261,12 @@ async function gameLoop(currentTime) {
 
 // --- Update Functions ---
 function updateHandState(predictions) {
-    if (predictions.length > 0) {
-        lastHandDetectionTime = Date.now();
-        const keypoints = predictions[0].keypoints;
+    const now = Date.now();
+    let leftDetected = false;
+    let rightDetected = false;
+
+    for (const prediction of predictions) {
+        const keypoints = prediction.keypoints;
 
         // Correct for 'object-fit: cover' by calculating scale and offset
         const videoRatio = video.videoWidth / video.videoHeight;
@@ -279,52 +294,72 @@ function updateHandState(predictions) {
         const indexTip = keypoints[8];
         if (thumbTip && indexTip) {
             const dist = Math.sqrt(Math.pow(thumbTip.x - indexTip.x, 2) + Math.pow(thumbTip.y - indexTip.y, 2));
-            hand.isPinching = dist < PINCH_THRESHOLD;
 
             const midPoint = { x: (thumbTip.x + indexTip.x) / 2, y: (thumbTip.y + indexTip.y) / 2 };
             const mappedMidPoint = mapToCanvas(midPoint);
             const targetX = mappedMidPoint.x;
             const targetY = mappedMidPoint.y;
 
+            // Determine which hand based on position
+            const handObj = (targetX < canvas.width / 2) ? leftHand : rightHand;
+            handObj.lastDetectionTime = now;
+            handObj.isPinching = dist < PINCH_THRESHOLD;
+
             const mappedThumb = mapToCanvas(thumbTip);
-            hand.thumbPos.x = mappedThumb.x;
-            hand.thumbPos.y = mappedThumb.y;
+            handObj.thumbPos.x = mappedThumb.x;
+            handObj.thumbPos.y = mappedThumb.y;
 
             const mappedIndex = mapToCanvas(indexTip);
-            hand.indexPos.x = mappedIndex.x;
-            hand.indexPos.y = mappedIndex.y;
+            handObj.indexPos.x = mappedIndex.x;
+            handObj.indexPos.y = mappedIndex.y;
 
             if (!isNaN(targetX) && !isNaN(targetY)) {
-                hand.visible = true;
+                handObj.visible = true;
                 
-                hand.dx = targetX - hand.x;
-                hand.dy = targetY - hand.y;
+                handObj.dx = targetX - handObj.x;
+                handObj.dy = targetY - handObj.y;
 
-                hand.velocityHistory.push({ dx: hand.dx, dy: hand.dy });
-                if (hand.velocityHistory.length > 3) {
-                    hand.velocityHistory.shift();
+                handObj.velocityHistory.push({ dx: handObj.dx, dy: handObj.dy });
+                if (handObj.velocityHistory.length > 3) {
+                    handObj.velocityHistory.shift();
                 }
 
-                hand.x += (targetX - hand.x) * SMOOTHING_FACTOR;
-                hand.y += (targetY - hand.y) * SMOOTHING_FACTOR;
+                handObj.x += (targetX - handObj.x) * SMOOTHING_FACTOR;
+                handObj.y += (targetY - handObj.y) * SMOOTHING_FACTOR;
 
             } else {
-                hand.visible = false;
+                handObj.visible = false;
             }
-        } else {
-            hand.isPinching = false;
-            hand.visible = false;
+
+            if (targetX < canvas.width / 2) leftDetected = true;
+            else rightDetected = true;
         }
-    } else {
-        hand.isPinching = false;
-        if (Date.now() - lastHandDetectionTime < HAND_PERSISTENCE_MS) {
-            hand.visible = true;
-            hand.x += hand.dx * 0.5;
-            hand.y += hand.dy * 0.5;
+    }
+
+    // Handle persistence for undetected hands
+    if (!leftDetected) {
+        leftHand.isPinching = false;
+        if (now - leftHand.lastDetectionTime < HAND_PERSISTENCE_MS) {
+            leftHand.visible = true;
+            leftHand.x += leftHand.dx * 0.5;
+            leftHand.y += leftHand.dy * 0.5;
         } else {
-            hand.visible = false;
-            hand.dx = 0;
-            hand.dy = 0;
+            leftHand.visible = false;
+            leftHand.dx = 0;
+            leftHand.dy = 0;
+        }
+    }
+
+    if (!rightDetected) {
+        rightHand.isPinching = false;
+        if (now - rightHand.lastDetectionTime < HAND_PERSISTENCE_MS) {
+            rightHand.visible = true;
+            rightHand.x += rightHand.dx * 0.5;
+            rightHand.y += rightHand.dy * 0.5;
+        } else {
+            rightHand.visible = false;
+            rightHand.dx = 0;
+            rightHand.dy = 0;
         }
     }
 }
@@ -333,29 +368,31 @@ function updateBalls() {
     for (let i = balls.length - 1; i >= 0; i--) {
         const ball = balls[i];
 
-        if (ball.isCaught) {
-            ball.x = hand.x;
-            ball.y = hand.y;
-            ball.dx = hand.dx;
-            ball.dy = hand.dy;
+        if (ball.isCaught && ball.heldBy) {
+            const handObj = ball.heldBy;
+            ball.x = handObj.x;
+            ball.y = handObj.y;
+            ball.dx = handObj.dx;
+            ball.dy = handObj.dy;
             ball.angularVelocity = 0; // No spin while held
 
-            if (!hand.isPinching) {
-                hand.releaseCounter++;
-                if (hand.releaseCounter >= 3) { // Adjusted for quicker release
+            if (!handObj.isPinching) {
+                handObj.releaseCounter++;
+                if (handObj.releaseCounter >= 3) { // Adjusted for quicker release
                     ball.isCaught = false;
-                    hand.heldBall = null;
-                    hand.releaseCounter = 0;
+                    handObj.heldBall = null;
+                    ball.heldBy = null;
+                    handObj.releaseCounter = 0;
 
                     // Calculate average velocity
-                    const avgVelocity = hand.velocityHistory.reduce((acc, v) => {
+                    const avgVelocity = handObj.velocityHistory.reduce((acc, v) => {
                         acc.dx += v.dx;
                         acc.dy += v.dy;
                         return acc;
                     }, { dx: 0, dy: 0 });
 
-                    avgVelocity.dx /= hand.velocityHistory.length;
-                    avgVelocity.dy /= hand.velocityHistory.length;
+                    avgVelocity.dx /= handObj.velocityHistory.length;
+                    avgVelocity.dy /= handObj.velocityHistory.length;
 
                     ball.dx = avgVelocity.dx * 1;
                     ball.dy = avgVelocity.dy * 1;
@@ -363,7 +400,7 @@ function updateBalls() {
                     ball.ignoreHandCollisionUntil = Date.now() + 500;
                 }
             } else {
-                hand.releaseCounter = 0; // Reset counter if pinching again
+                handObj.releaseCounter = 0; // Reset counter if pinching again
             }
         } else {
             // Apply gravity
@@ -404,7 +441,12 @@ function updateBalls() {
 }
 
 function checkHandCollisions() {
-    if (!hand.visible) return;
+    checkSingleHandCollisions(leftHand);
+    checkSingleHandCollisions(rightHand);
+}
+
+function checkSingleHandCollisions(handObj) {
+    if (!handObj.visible) return;
 
     for (const ball of balls) {
         if (ball.isCaught) continue;
@@ -412,15 +454,16 @@ function checkHandCollisions() {
             continue; // Skip collision if ignoring hand physics
         }
 
-        const dx = ball.x - hand.x;
-        const dy = ball.y - hand.y;
+        const dx = ball.x - handObj.x;
+        const dy = ball.y - handObj.y;
         const distance = Math.sqrt(dx * dx + dy * dy);
-        const minDistance = ball.radius + hand.radius;
+        const minDistance = ball.radius + handObj.radius;
 
         if (distance < minDistance) {
-            if (hand.isPinching && !hand.heldBall) { // Can only grab if not already holding a ball
+            if (handObj.isPinching && !handObj.heldBall) { // Can only grab if not already holding a ball
                 ball.isCaught = true;
-                hand.heldBall = ball; // Keep track of the held ball
+                handObj.heldBall = ball;
+                ball.heldBy = handObj; // Link ball to hand
             }
         }
     }
@@ -488,11 +531,11 @@ function checkSingleHoopRimCollision(hoopObj) {
 }
 
 function checkScore() {
-    checkSingleHoopScore(hoop);
-    checkSingleHoopScore(hoopRight);
+    checkSingleHoopScore(hoop, 'left'); // Left hoop scores for right player
+    checkSingleHoopScore(hoopRight, 'right'); // Right hoop scores for left player
 }
 
-function checkSingleHoopScore(hoopObj) {
+function checkSingleHoopScore(hoopObj, side) {
     for (const ball of balls) {
         if (ball.isCaught || ball.scored) continue;
 
@@ -510,11 +553,18 @@ function checkSingleHoopScore(hoopObj) {
         const isMovingDown = ball.dy > 0;
 
         if (isWithinRimX && isPassingThroughRimVertically && isMovingDown) {
-            score++;
             ball.scored = true;
             ball.dy *= 0.5; // Slow down vertical velocity
             ball.dx *= 0.5; // Slow down horizontal velocity
-            console.log("Score! Current Score: ", score);
+            console.log("Score! Current Score: left=", leftScore, " right=", rightScore);
+
+            if (side === 'left') {
+                rightScore++;
+                rightFlashEndTime = Date.now() + FLASH_DURATION;
+            } else if (side === 'right') {
+                leftScore++;
+                leftFlashEndTime = Date.now() + FLASH_DURATION;
+            }
         }
     }
 }
@@ -530,7 +580,8 @@ function createBall() {
         angularVelocity: Math.random() * 0.1 - 0.05, // Initial random spin
         isCaught: false,
         scored: false,
-        mass: 1 // Add mass property for physics calculations
+        mass: 1, // Add mass property for physics calculations
+        heldBy: null
     });
 }
 
@@ -608,43 +659,50 @@ function draw() {
 
     drawHoop();
 
-    // Draw hand indicator
-    if (hand.visible) {
-        ctx.beginPath();
-        ctx.arc(hand.x, hand.y, hand.radius, 0, Math.PI * 2);
-        ctx.fillStyle = hand.color;
-        ctx.fill();
-
-        if (hand.isPinching) {
+    // Draw hand indicators
+    [leftHand, rightHand].forEach(handObj => {
+        if (handObj.visible) {
             ctx.beginPath();
-            ctx.arc(hand.x, hand.y, hand.radius * 0.7, 0, Math.PI * 2);
-            ctx.strokeStyle = 'white';
-            ctx.lineWidth = 5;
-            ctx.stroke();
-        }
-
-        // Draw smaller indicators for thumb and index finger
-        if (hand.thumbPos && hand.indexPos) {
-            ctx.beginPath();
-            ctx.arc(hand.thumbPos.x, hand.thumbPos.y, 10, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(169, 169, 169, 0.7)'; // Grey for thumb
+            ctx.arc(handObj.x, handObj.y, handObj.radius, 0, Math.PI * 2);
+            ctx.fillStyle = handObj.color;
             ctx.fill();
 
-            ctx.beginPath();
-            ctx.arc(hand.indexPos.x, hand.indexPos.y, 10, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(169, 169, 169, 0.7)'; // Grey for index
-            ctx.fill();
+            if (handObj.isPinching) {
+                ctx.beginPath();
+                ctx.arc(handObj.x, handObj.y, handObj.radius * 0.7, 0, Math.PI * 2);
+                ctx.strokeStyle = 'white';
+                ctx.lineWidth = 5;
+                ctx.stroke();
+            }
+
+            // Draw smaller indicators for thumb and index finger
+            if (handObj.thumbPos && handObj.indexPos) {
+                ctx.beginPath();
+                ctx.arc(handObj.thumbPos.x, handObj.thumbPos.y, 10, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(169, 169, 169, 0.7)'; // Grey for thumb
+                ctx.fill();
+
+                ctx.beginPath();
+                ctx.arc(handObj.indexPos.x, handObj.indexPos.y, 10, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(169, 169, 169, 0.7)'; // Grey for index
+                ctx.fill();
+            }
         }
-    }
+    });
 
     drawScore();
 }
 
 function drawScore() {
+    const now = Date.now();
     ctx.font = "48px Arial";
-    ctx.fillStyle = "white";
+    ctx.textAlign = "left";
+    ctx.fillStyle = (now < leftFlashEndTime) ? "green" : "white";
+    ctx.fillText(`Left: ${leftScore}`, 50, 60);
+
     ctx.textAlign = "right";
-    ctx.fillText(`Score: ${score}`, canvas.width - 50, 60);
+    ctx.fillStyle = (now < rightFlashEndTime) ? "green" : "white";
+    ctx.fillText(`Right: ${rightScore}`, canvas.width - 50, 60);
 }
 
 function drawFloor() {
