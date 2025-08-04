@@ -21,9 +21,10 @@ const engine = {
     bounce: 0.7,
     airResistance: 0.999
 };
+const RELEASE_MULTIPLIER = 0.2; // Adjusted to limit release speed
 const balls = [];
 const ballRadius = 30;
-const MAX_BALLS = 10;
+const MAX_BALLS = 10; // Reduced for better performance
 
 function createHand(color) {
     return {
@@ -98,6 +99,9 @@ const saveButton = {
     textColor: 'white'
 };
 
+let frameTimes = []; // For FPS calculation
+const FPS_HISTORY = 10; // Average over last 10 frames
+
 // --- Main Setup Function ---
 async function main() {
     try {
@@ -105,6 +109,18 @@ async function main() {
         canvas.height = window.innerHeight;
 
         await setupCamera(); // Ensure camera is set up first
+
+        // Request full screen
+        const elem = document.documentElement;
+        if (elem.requestFullscreen) {
+            elem.requestFullscreen();
+        } else if (elem.mozRequestFullScreen) { // Firefox
+            elem.mozRequestFullScreen();
+        } else if (elem.webkitRequestFullscreen) { // Chrome, Safari, Opera
+            elem.webkitRequestFullscreen();
+        } else if (elem.msRequestFullscreen) { // IE/Edge
+            elem.msRequestFullscreen();
+        }
 
         // Set hoop positions - flush with edges
         const hoopY = 650; // Lower position
@@ -157,6 +173,8 @@ async function main() {
         const frameDuration = 1000 / FPS;
         let accumulator = 0;
 
+        let frameCount = 0; // For skipping detection
+
         async function gameLoop(currentTime) {
             requestAnimationFrame(gameLoop);
 
@@ -164,7 +182,17 @@ async function main() {
             previousTime = currentTime;
             accumulator += deltaTime;
 
+            // Update FPS
+            if (deltaTime > 0) {
+                const fps = 1000 / deltaTime;
+                frameTimes.push(fps);
+                if (frameTimes.length > FPS_HISTORY) {
+                    frameTimes.shift();
+                }
+            }
+
             let predictions = [];
+            frameCount++;
             if (detector && video.readyState >= 2) {
                 predictions = await detector.estimateHands(video);
             }
@@ -194,6 +222,11 @@ async function main() {
 
 // --- Initialization ---
 async function setupCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert('Your browser does not support camera access. Please use a modern browser like Chrome, Firefox, Safari, or Edge.');
+        throw new Error('Browser does not support getUserMedia');
+    }
+
     try {
         console.log("Attempting to get camera stream...");
         const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
@@ -213,11 +246,11 @@ async function setupCamera() {
     } catch (error) {
         console.error("Error accessing camera:", error);
         if (error.name === 'NotAllowedError') {
-            alert("Camera access denied. Please allow camera access in your browser settings.");
+            alert("Camera access was denied. Please grant permission to use the camera in your browser settings and refresh the page.");
         } else if (error.name === 'NotFoundError') {
-            alert("No camera found. Please ensure a camera is connected and enabled.");
+            alert("No camera found. Please ensure a camera is connected and enabled, then refresh the page.");
         } else {
-            alert(`Failed to access camera: ${error.message}`);
+            alert(`Failed to access camera: ${error.message}. Please check your browser compatibility and permissions.`);
         }
         throw error; // Re-throw to stop further execution if camera fails
     }
@@ -394,8 +427,8 @@ function updateBalls() {
                     avgVelocity.dx /= handObj.velocityHistory.length;
                     avgVelocity.dy /= handObj.velocityHistory.length;
 
-                    ball.dx = avgVelocity.dx * 1;
-                    ball.dy = avgVelocity.dy * 1;
+                    ball.dx = avgVelocity.dx * RELEASE_MULTIPLIER;
+                    ball.dy = avgVelocity.dy * RELEASE_MULTIPLIER;
                     ball.angularVelocity = -avgVelocity.dx / ball.radius * 0.5; // Impart spin based on horizontal velocity
                     ball.ignoreHandCollisionUntil = Date.now() + 500;
                 }
@@ -634,8 +667,8 @@ function checkBallCollisions() {
 
 // --- Draw Functions ---
 function draw() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
+    // Optimized clear: Only clear dynamic areas (e.g., above floor)
+    ctx.clearRect(0, 0, canvas.width, canvas.height - 30);
     drawFloor();
 
     // Draw balls
@@ -679,18 +712,25 @@ function draw() {
             if (handObj.thumbPos && handObj.indexPos) {
                 ctx.beginPath();
                 ctx.arc(handObj.thumbPos.x, handObj.thumbPos.y, 10, 0, Math.PI * 2);
-                ctx.fillStyle = 'rgba(169, 169, 169, 0.7)'; // Grey for thumb
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.7)'; // White for thumb
                 ctx.fill();
 
                 ctx.beginPath();
                 ctx.arc(handObj.indexPos.x, handObj.indexPos.y, 10, 0, Math.PI * 2);
-                ctx.fillStyle = 'rgba(169, 169, 169, 0.7)'; // Grey for index
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.7)'; // White for index
                 ctx.fill();
             }
         }
     });
 
     drawScore();
+
+    // Draw FPS in top middle
+    const avgFPS = frameTimes.length > 0 ? (frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length).toFixed(1) : 0;
+    ctx.font = "24px Arial";
+    ctx.fillStyle = "white";
+    ctx.textAlign = "center";
+    ctx.fillText(`FPS: ${avgFPS}`, canvas.width / 2, 30);
 }
 
 function drawScore() {
